@@ -1,0 +1,447 @@
+---
+output:
+  BiocStyle::html_document
+---
+
+<!---
+Because we split the analysis pipeline in different independent files,
+to speed up processing it, here in the setup block we load libraries and
+objects that were loaded or produced in the previously processed file,
+and which are necessary in this file.
+--->
+
+```{r setup, cache=FALSE, echo=FALSE, results='hide', message=FALSE}
+library(knitr)
+library(SummarizedExperiment)
+library(edgeR)
+library(geneplotter)
+
+opts_chunk$set(cache=TRUE,
+               cache.path="cache/file2",
+               cache.extra=R.version.string,
+               autodep=TRUE,
+               fig.align="center",
+               comment="")
+
+se <- readRDS(file.path("rawCounts", "seUCEC.rds"))
+dge <- readRDS(file.path("results", "dge.rds"))
+se.filt.unnorm <- readRDS(file.path("results", "se.filt.unnorm.rds"))
+dge.filt.unnorm <- readRDS(file.path("results", "dge.filt.unnorm.rds"))
+se.filt <- readRDS(file.path("results", "se.filt.rds"))
+dge.filt <- readRDS(file.path("results", "dge.filt.rds"))
+
+
+```
+
+# Differential expression analysis 
+
+In the next step we are going to identify changes in gene expression. The analysis will allow us to answer the next question:
+
+"What is the number of genes that change their activity between tumor and control samples?" 
+
+And in further studies we will know what genes are the ones that change their activity.
+
+We are going to work with the normalized gene expression data set that we have obtained in the step before.
+
+## Simple Differential expression analysis 
+
+We perform a simple examination of expression changes and their associated p-values using the R/Bioconductor package [sva](http://bioconductor.org/packages/sva).
+
+Surrogate variable analysis (SVA) is a technique that tries to capture sources of heterogeneity in high-throughput profiling data, such as non-biological variability introduced by batch effects. 
+
+SVA provides a function to quickly perform F-tests for detecting genes significantly changing between the full and null models. This enables a quick overview of the impact of adjusting for the estimated heterogeneity.
+
+- We examine first how many genes change across conditions without adjustment. It will be useful in order to compare the model with and without surrogate variables.
+```{r, message=FALSE}
+library(sva)
+mod <- model.matrix(~ se.filt$type, colData(se.filt))
+mod0 <- model.matrix(~ 1, colData(se.filt))
+pv <- f.pvalue(assays(se.filt)$logCPM, mod, mod0)
+sum(p.adjust(pv, method="fdr") < 0.01)
+
+
+```
+
+There are `5570` genes significantly changing their expression at FDR < 1%. In Figure \@ref(fig:pdist) below we show the distribution of the resulting p-values.
+
+```{r pdist, echo=FALSE, out.width="900px", fig.cap="Distribution of raw p-values for an F-test on every gene between tumor and normal samples."}
+hist(pv, main="", las=1)
+```
+In the graph we can see the distribution of raw p-values for an F-test on every gene between tumor and normal samples.
+
+A distribution of p -values under the null hypothesis should be uniform. Assuming that most genes are not differentially expressed (DE), the previous histogram should have looked uniform with a peak at low p -values for the truly DE genes. Departures from this indicate data heterogeneity.
+
+- Now, let's estimate surrogate variables using the `sva()` function.
+
+```{r}
+sv <- sva(assays(se.filt)$logCPM, mod, mod0)
+sv$n
+```
+
+The SVA algorithm has found `11` surrogate variables. Let's use them to assess again the extent of differential expression this time adjusting for these surrogate variables.
+
+```{r}
+modsv <- cbind(mod, sv$sv)
+mod0sv <- cbind(mod0, sv$sv)
+pvsv <- f.pvalue(assays(se.filt)$logCPM, modsv, mod0sv)
+sum(p.adjust(pvsv, method="fdr") < 0.01)
+```
+
+We have increased the number of DE genes (increase of statistical power) to `7040`, as we can see, 1470 more genes have been detected as differentially expressed than before (5570 genes).
+Figure \@ref(fig:psvdist) shows the resulting distribution of p-values.
+
+```{r psvdist, echo=FALSE, out.width="900px", fig.cap="Distribution of raw p-values for an F-test on every gene between tumor and normal samples, adjusting for surrogate variables estimated with SVA."}
+hist(pvsv, main="", las=1)
+```
+
+After adjusting for surrogate variables using SVA the p -value distribution is more uniform now for the non-DE genes.
+
+
+##Differential expression analysis based in Fold-change 
+
+In this section we can examine gene-by-gene changes in expression by comparing expression values between two groups of samples, tumoral and normal ones.
+
+Calculate log fold-changes between tumoral and normal samples for all genes using the rowMeans() function:
+
+```{r MA-plot, echo=FALSE, out.width="900px", fig.cap="MA-plot "} 
+logCPM <- cpm(dge.filt, log=TRUE, prior.count=3)
+tumExp <- rowMeans(logCPM[, se.filt$type == "tumor"])
+normalExp <- rowMeans(logCPM[, se.filt$type == "normal"])
+par(mfrow = c(1, 2))
+plot(tumExp, normalExp, xlab = "Tumor", ylab = "Normal", pch = ".", cex = 4, las = 1)
+abline (0,1, col=2)
+plot((normalExp + tumExp)/2, tumExp - normalExp, pch = ".", cex = 4, las = 1)
+abline (h=0, col = 2)
+```
+
+In the plot \@ref(fig:MA-plot) Normal vs. Tumor, if all genes were equally expressed in both samples, the dots (each dot represents one gene) would map a perfect diagonal line. 
+We could observe, though, that there are dots outside the line. It is normal to have some area over and above the line, but it is clear that there are some points way outside the diagonal. 
+Those one would be the ones we are looking for, to see if they are statistically differentially expressed.
+
+In the left, the dots over the diagonal would be those overexpressed in normal and underexpressed in tumor samples, and the ones under the diagonal, the other way around.
+
+In the right plot, which shows the same idea, as the y axis is a tumor-normal take away, all dots over the horizontal 0 line will be overexpressed in tumor samples and underexpressed in normal ones, and the other way around with the dots far away and under the 0 threshold. 
+
+
+## Volcano Plot
+
+We used the volcano plot (https://en.wikipedia.org/wiki/Volcano_plot_(statistics) in order to plot the raw p-values as function of their fold-changes,both in logarithmic scale, \@ref(fig:volcano).
+
+
+```{r volcano, echo=FALSE, out.width="600px", fig.cap="Volcano plot"}
+
+FDRpvalue <- p.adjust(pvsv, method="fdr")
+expnormal <- rowMeans(logCPM[, se.filt$type == "normal"])
+exptumor <- rowMeans(logCPM[, se.filt$type == "tumor"])
+
+logFC1 <- exptumor-expnormal
+plot(logFC1, -log10(pv), pch=16, cex=0.7, xlab="Log fold-change", ylab="-log10 Raw p-value", las=1, col = ifelse(abs(logFC1) >= 2, "red", "black"))
+abline(h=-log10(max(pvsv[FDRpvalue <= 0.001])), lty=2)
+```
+
+In the previous figure we can see, in red, the differentially overexpressed (to the right) and underexpressed (to the left) genes, although it's just a first visualization idea, based on the log fold-change approach, and further analysis will be done in the genes to verify this. 
+
+##Significance
+
+A first straightforward approach to differential expression analysis is to simply rank genes by decreasing absolute value of log 2 fold changes and call DE those at the top (e.g., the top 10) of the ranking:
+
+```{r}
+log2fc <- tumExp - normalExp
+ranking <- order(abs(log2fc), decreasing = TRUE)
+head(data.frame(Log2FC = round(log2fc[ranking], digits = 3), FC = round(2^log2fc[ranking], 
+    digits = 3), `1/FC` = round(2^(-log2fc[ranking]), digits = 3), row.names = rowData(se.filt)$symbol[ranking], 
+    check.names = FALSE), n = 10)
+```
+
+Example of result: MPLKIP is 588.432 more expressed in tumor samples than in normal ones so we can say that is an overexpressed gene in the cancer that we are studying. 
+
+
+#DE analysis with linear regression models.
+
+We are going to perform a curated DE analysis using a linear regression analysis, a statistical technique that attempts to explore and model the relationship between two or more variables. We will use the package of limma in order to perform the linear model.
+
+###Differential expression with LIMMA
+
+A general workflow with limma (http://bioconductor.org/packages/limma) for RNA-seq data consists of the following steps:
+1. Build design matrix: model.matrix()
+2. Calculate observational-level weights (if needed): voom()
+3. Estimate correlation in repeated measurements of a blocking factor (if needed): duplicateCorrelation()
+4. Fit linear model: lmFit()
+5. Build contrast matrix (if needed): makeContrasts()
+6. Fit contrasts (if needed): contrasts.fit()
+7. Calculate moderated t -statistics ( trend=TRUE if needed): eBayes()
+8. Output results: topTable()
+
+We are not to follow all the mentioned steps of the general workflow. Below we will mention the process carried out and the results obtained. 
+
+###Adjust for the mean-variance relationship
+
+RNA-seq counts may vary considerably from sample to sample for the same gene and different samples may be sequenced to different depths. This may lead to identical CPM values for very different count sizes and motivates the need to model the mean-variance trend of log-CPM values at the individual observation level.
+
+Two ways to incorporate the mean-variance relationship into DE analysis with linear models:
+
+- limma-trend: modify limma's empirical Bayes procedure to incorporate a mean-variance trend, i.e., in the call to eBayes() , squeezing genewise variances towards a global mean-variance trend, instead of doing it towards a constant pooled variance.
+- limma-voom: calculate precision weights for each gene-by-sample normalized expression value using a new function voom() . Use the resulting matrix of precision weights, jointly with the matrix of
+expression values, to fit the linear models, i.e., in the call to lmFit() .
+
+A paired design arises from experiments where there are two measurements per individual and thus one speaks of paired measurements. 
+This is also a common setting when each individual already carries the two conditions of interest (e.g., tissues), and therefore, we can exploit this circumstance to adjust for any characteristics that may affect measurements (e.g., sex, age, BMI, genetic background).
+To set a paired design, the formula that builds the design matrix should include the pair indicator variable.
+
+```{r}
+table(substr(se.filt$bcr_patient_barcode,1,12))
+
+```
+
+In the previous table, the colums are the samples (the 23 individuals we have been working with) and the row is the number of samples for individual (corroborating that the model will take 2 samples per individual, the tumor and normal ones). 
+
+
+When building the design matrix by default we could observe that the reference level of the factor variable is normal. We decided to change it to tumor so that positive values of logFC would mean genes overexpressed in cancer: 
+
+```{r}
+se.filt$type <- relevel(se.filt$type, ref="tumor")
+```
+
+
+###Adjust for the mean-variance relationship (LIMMA-TREND)
+
+Use limma to build the design matrix, fit the model, calculate the moderate t-statistic and obtain the DE genes.
+```{r}
+library(limma) #Allow us to obtain differentially expressed genes using linear regresion models.
+#Build the design matrix.
+mod<- model.matrix(~type + substr(se.filt$bcr_patient_barcode, 1, 12), data = colData(se.filt))
+head(mod, n=3)
+# substr(se.filt$bcr_patient_barcode, 1, 12) is the same than just bcr_patient_barcode
+#Fit the linear model with the CPM values
+fit1 <- lmFit(assays(se.filt)$logCPM, mod)
+#Calculate moderated t -statistics using the mean-variance trend:
+fit1 <- eBayes(fit1, trend = TRUE)
+#Examine the extent of differential expression:
+FDRcutoff <- 0.01
+res1 <- decideTests(fit1, p.value = FDRcutoff)
+summary(res1)
+dim(res1)
+```
+
+The first block of data represents the coefficients of the model generated (the intercept) and a global summary of what kind of expression we have, compared to tumor type samples. So, around 3000 upstream and downstream regulated genes, and around 6000 for not significantly DE genes. 
+
+And the last row is a summary, with our total gene set (around 12000, which fits the 2*3000+6000 summary from the beggining) and 24 columns in the table. Being the first column the block explained before and each of the others a summary for each individual, where the columns is every ID, and the rows are their specific up, down regulated and not significantly expressed genes. 
+
+For the genes, we can also take a look at some meta-data, such as the chromosome they are located in:
+
+Add gene meta data:
+```{r}
+#Add gene metadata and fetch table of results:
+genesmd <- data.frame(chr = as.character(seqnames(rowRanges(se.filt))), symbol = rowData(se.filt)[,1], stringsAsFactors = FALSE)
+fit1$genes <- genesmd
+tt1 <- topTable(fit1, coef = 2, n = Inf)
+head(tt1)
+sort(table(tt1$chr[tt1$adj.P.Val < FDRcutoff]), decreasing = TRUE)
+
+DEgenes1 <- rownames(tt1)[tt1$adj.P.Val < FDRcutoff]
+DEgenes_symbol1 <- tt1$symbol[tt1$adj.P.Val < FDRcutoff]
+length(DEgenes1)
+
+```
+
+The importance of knowing in which chromosome the genes are located may be that it could happen that a specific or a few chromosomes are affecting more to this kind of cancer than others. We will take special attention to the chromosomes of the final differentially expressed genes, but, as an overview, we can see that chromosome 1 is the one with most genes involved.
+
+The other important comment about the last table is that there are 12 genes related to Y chromosome, but this samples were all taken from females, so no chromosome Y should had appeared. We will consider it just as a mapping mistake of the reads, but we don't consider it's going to affect the analysis, as it's the chromosome with less genes associated. 
+
+And the same happens with the last 4 chromosomes. Some reads were map to those specific chromosomes, that were not correctly identified by the software. In the 3 first cases we can see that the chromosome is annotated, but in the last, not even so. As there is just one gene in each case, we are also not going to consider that as a problem. 
+
+
+Examine diagnostic plots for limma DE analysis with limma-trend  in figure 
+\@ref(fig:diagnosticplottrend): 
+```{r diagnosticplottrend, echo=FALSE, out.width="600px", fig.cap="Diagnostic plots for Limma-trend DE analysis"}
+par(mfrow = c(1, 2), mar = c(4, 5, 2, 2))
+hist(tt1$P.Value, xlab = "Raw P-values", main = "", las = 1)
+qqt(fit1$t[, 2], df = fit1$df.prior + fit1$df.residual, main = "", pch = ".", cex = 3)
+abline(0, 1, lwd = 2, col=2)
+
+```
+
+In the previous figure we can visualize the limma-trend results.
+On the left histogram we can observe a uniformity with a peak at low p-values for the truly DE genes. 
+
+In the plot on the right, the black dotted line is formed by all the genes found in this approach that are DE genes. 
+
+We are going to perform either the limma-voom approach and for the adjusment of unknown covariates, and compare afterwards the results, to see which one results better for our samples.
+
+
+###Adjust for the mean-variance relationship (LIMMA-VOOM)
+
+Limma-voom \@ref(fig:vplot): calculate precision weights for each gene-by-sample normalized expression value using a new function voom(). Use the resulting matrix of precision weights, jointly with the matrix ofexpression values, to fit the linear models, i.e., in the call to lmFit().
+
+```{r vplot, echo=FALSE, out.width="600px", fig.cap="Voom:Mean variance trend"}
+mod<- model.matrix(~type + substr(se.filt$bcr_patient_barcode, 1, 12), data = colData(se.filt))
+#Calculate weights that estimate the mean-variance relationship at gene-by-sample level. Note that the function voom() requires a DGEList object as input
+v <- voom(dge.filt,mod,plot=TRUE)
+```
+
+We can observe the mean-variance relation at gene level. 
+The voom method estimates the mean-variance relationship of the log-counts, generates a precision weight for each observation and enters these into the limma empirical Bayes analysis pipeline. 
+
+Differential expression is then performed as usual by using limma package.
+
+
+```{r}
+#Fit the linear model using the voom weights:
+fit_v <- lmFit(v, mod)
+#Calculate the moderated t -statistics:
+fit_v <- eBayes(fit_v)
+
+#Examine the extent of differential expression at 1% FDR:
+res_v <- decideTests(fit_v, p.value=FDRcutoff)
+summary(res_v)
+
+```
+
+```{r}
+#Addition of gene metadata and fetch table of results:
+genesmd <- data.frame(chr = as.character(seqnames(rowRanges(se.filt))), symbol = rowData(se.filt)[,1], stringsAsFactors = FALSE)
+fit_v$genes <- genesmd
+tt_v <- topTable(fit_v, coef = 2, n = Inf)
+head(tt_v)
+DEgenes_v <- rownames(tt_v)[tt_v$adj.P.Val < FDRcutoff]
+DEgenes_symbolv <- tt_v$symbol[tt_v$adj.P.Val < FDRcutoff]
+length(DEgenes_v)
+```
+
+```{r}
+sort(table(tt_v$chr[tt_v$adj.P.Val < FDRcutoff]), decreasing = TRUE)
+
+```
+After the same previous steps (generating the matrix model), we can now visualize the results.
+
+
+Examine diagnostic plots for limma DE analysis with voom weights \@ref(fig:diagnostic-plot-voom): 
+
+
+```{r diagnostic-plot-voom, echo=FALSE, out.width="600px", fig.cap="Diagnostic plots for Limma-voom DE analysis"}
+par(mfrow = c(1, 2), mar = c(4, 5, 2, 2))
+hist(tt_v$P.Value, xlab = "Raw P-values", main = "", las = 1)
+qqt(fit_v$t[, 2], df = fit_v$df.prior + fit_v$df.residual, main = "", pch = ".", cex = 3)
+abline(0, 1, lwd = 2, col= 2)
+
+```
+
+Same as with the limma-trend approach, we can see, first, a diagram of p-values with a peak for the low ones (differentially expressed) and a more or less constant frequency for the other ones. This means that the approach is good. 
+
+In the right plot, we can also observe similar results than in the limma-trend one.
+
+
+The next step in our differential expression ananlysis consists in correcting the model for unkown covariates, adding them to the model. 
+
+##Adjust for unknown covariates
+
+```{r}
+
+mod<- model.matrix(~type + substr(se.filt$bcr_patient_barcode, 1, 12), data = colData(se.filt))
+mod0 <- model.matrix(~ substr(se.filt$bcr_patient_barcode, 1, 12), colData(se.filt))
+#estimation  of surrogate variables from the log-CPM values calculated by voom
+sv <- sva(v$E, mod = mod, mod0=mod0)
+sv$n 
+mod_u <- cbind(mod, sv$sv)
+colnames(mod_u) <- c(colnames(mod_u)[1:24], paste0("SV", 1:sv$n))
+head(mod_u,n=5)
+```
+
+There are 9 SVs. Second, we add these SVs to the design matrix, which has the following form:
+
+```{r}
+fit_u <- lmFit(v, mod_u)
+fit_u <- eBayes(fit_u)
+```
+
+We examine the extent of differential expression at 1% FDR:
+```{r}
+res_u <- decideTests(fit_u, p.value = FDRcutoff)
+summary(res_u)
+#Finally, the metadata is added, the table of results is computed and the number of DE genes is calculated:
+
+fit_u$genes <- genesmd
+tt_u <- topTable(fit_u, coef = 2, n = Inf)
+saveRDS(tt_u, file.path("results", "tt_u.rds"))
+DEgenes_u <- rownames(tt_u)[tt_u$adj.P.Val < FDRcutoff]
+DEgenes_symbol_u <- tt_u$symbol[tt_u$adj.P.Val < FDRcutoff]
+length(DEgenes_u)
+```
+Though it may not look significant, the DE genes have globally increased, as there are more or less 3500 up and down regulated genes, and just 5000 not DE. 
+
+We can also observe the chromosome distribution of DE genes. 
+
+```{r}
+sort(table(tt_u$chr[tt_u$adj.P.Val < FDRcutoff]), decreasing = TRUE)
+head(mod, n=3)
+```
+
+We can also examine the corresponding plots of this model in \@ref(fig: diagnostic-plot-Adjust-for-unknown-covariates: 
+
+```{r diagnostic-plot-Adjust-for-unknown-covariates, echo=FALSE, out.width="600px", fig.cap="Diagnostic plots for Adjust for unknown covariates"}
+par(mfrow = c(1, 2), mar = c(4, 5, 2, 2))
+hist(tt_u$P.Value, xlab = "Raw P-values", main = "", las = 1)
+qqt(fit_u$t[, 2], df = fit_u$df.prior + fit_u$df.residual, main = "", pch = ".", cex = 3)
+abline(0, 1, lwd = 2, col= 2)
+
+```
+The plots look similar again. In the left figure we see highly differenciated peak for DE genes. And in the right one, we can see black dots 20 quantiles far away from the red line. We are specially interested in the standing alone dots of the extrems. 
+
+## Volcano plot of different used models
+
+The so-called volcano plot is a widely used diagnostic plot in DE analysis to assess the extent of DE by plotting the raw p-values as function of their fold-changes, both in logarithmic scale.
+
+As all approaches were more or less the same, we can visualize the most differentially expressed genes in all of them, with a volcano plot. 
+We showed before the figure, but here we can show the specific most DE genes. 
+
+Volcano plot for Model 1 \@ref(fig:volcanomodels1): 
+```{r volcanomodels1, echo=FALSE, out.width="600px", fig.cap="Model 1 - Volcano plots of DE"}
+volcanoplot(fit1, coef = 2, highlight = 5, names = fit1$genes$symbol, main = "Model 1 - Limma Trend", las = 1)
+head(tt1, n=5)
+```
+
+Volcano plot for Model 2 \@ref(fig:volcanomodels2): 
+
+```{r volcanomodels2, echo=FALSE, out.width="600px", fig.cap="Model 2 - Volcano plots of DE"}
+volcanoplot(fit_v, coef = 2, highlight = 5, names = fit_v$genes$symbol, main = "Model 2 - Limma Voom", las = 1)
+head(tt_v, n=5)
+```
+
+Volcano plot for Model 3 \@ref(fig:volcanomodels3): 
+
+```{r volcanomodels3, echo=FALSE, out.width="600px", fig.cap="Model 3 - Volcano plots of DE"}
+volcanoplot(fit_u, coef = 2, highlight = 5, names = fit_u$genes$symbol, main = "Model 3 - Adjust for unknown covariates", las = 1)
+head(tt_u, n=5)
+```
+
+The volcano plots for the three models look quite similar, but we can see that the top DE genes are not the same. Nevertheless, it is important to considerate that some top genes do appear in all the figures, which makes them more likely to be correctly identified. 
+For the overexpressed top genes (in the right half of the figures), BNIP2 appears in all of them, while CACNA1S and TSG10 appear in two out of three.
+On the other hand, for the underexpressed genes, OR4D10 is also robust in all the models. 
+
+
+The previous figure \@ref(fig:maPlotmodel3) is another way of showing the results for model 3. This time, overexpressed genes are in black over the 0 horizontal threshold, and the underexpressed are below it. The red dots are the non-DE genes. 
+
+```{r maPlotmodel3, echo=FALSE, out.width="600px", fig.cap="MA plot for the Model 3"}
+par(mfrow=c(1, 1))
+top7 <- order(fit_u$lods[, 2], decreasing = TRUE)[1:7]
+limma::plotMA(fit_u, coef = 2, status = rownames(fit_u$lods) %in% DEgenes_u,legend = "topright",
+main = "MA-plot for Model 3", hl.pch = 46, hl.cex = 4, bg.pch = 46, bg.cex = 3, las = 1)
+text(fit_u$Amean[top7], fit_u$coef[top7, 2], fit_u$genes$symbol[top7], cex = 0.5, pos = 4)
+```
+
+As we can observe in the different examination diagnostic plots the results obtained with the different models are similar. 
+However Model 3 (Adjust for unknown covariates) is the one that is going to be used for the Funtional Enrichment Analysis as the outcome of interest is not confounded with other sources of variation.
+With this method we could detect the highest number of DE genes (6540).  
+
+```{r}
+length(DEgenes1)
+length(DEgenes_v)
+length(DEgenes_u)
+saveRDS(DEgenes_u, file.path("results", "DEgenes.rds"))
+
+```
+
+
+
+
+

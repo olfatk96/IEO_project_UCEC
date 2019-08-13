@@ -1,0 +1,66 @@
+---
+title: "Analysis of a TCGA RNA-seq data set on Uterine Corpus Endometrial Carcinoma"
+author:
+- name: Gonzalez L.
+  affiliation:
+  - &id Master Programme on Bioinformatics for Health Sciences, Universitat Pompeu Fabra, Barcelona, Spain
+  email: laura.gonzalez15@estudiant.upf.edu 
+- name: Murillo M.
+  affiliation: *id
+  email: marina.murillo01@estudiant.upf.edu 
+- name: Khannous O.
+  affiliation: *id
+  email: olfat.khannous01@estudiant.upf.edu 
+date: "`r format(Sys.time(), '%B %e, %Y')`"
+output: 
+  BiocStyle::html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+bibliography: bibliography.bib
+---
+
+# Introduction
+
+Analysis of differential gene expression has been proved useful in many fields and applications. Related to RNA sequencing, differential expression analysis means taking the normalized read count data and performing statistical analysis to discover quantitative changes in expression levels between experimental groups. For example, the use of statistical testing to decide whether, for a given gene, an observed difference in read counts is significant, that is, whether it is greater than what would be expected just due to natural random variation.
+
+In this report we are going to use different methods to analyze the raw RNA-seq data of some uterine cancer samples. 
+
+Uterine cancer is a disease that develops in the tissues of the uterus. The uterus or womb is a secondary sex organ of the female reproductive system in most mammals, including humans, where the fetus develops during gestation. 
+Depending on the specific area where a tumor develops, this kind of cancer can be classified in two types:  endometrial cancer forms from the lining of the uterus and uterine sarcoma forms from the muscles or support tissue of the uterus.
+
+The samples used in this report belong to the first, more common and less aggressive type mentioned. Although it can usually be cured, the endometrial carcinogenesis is thought to be caused by a multi-step process that involves the interaction of hormonal regulation, gene mutation, adhesion molecules and apoptosis, and as many other complex types of cancer, it's molecular pathogenesis is not completely described. 
+
+The samples used for the analysis come from a cohort of The Cancer Genome Atlas (TCGA), and we are testing the hypothesis that differential expression between tumor and control samples can reveal specific gene sets involved in the mentioned unknown pathogenesis. 
+
+As the input data is in raw RNA read counts, the first part of the project will be a summary and information extraction of the dataset. 
+
+
+```{r echo=FALSE, results='asis'}
+cat(readLines("QAanalysis.knit.md"), sep="\n")
+```
+
+```{r echo=FALSE, results='asis'}
+cat(readLines("DEanalysis.knit.md"), sep="\n")
+```
+
+```{r echo=FALSE, results='asis'}
+cat(readLines("FEanalysis.knit.md"), sep="\n")
+```
+
+# References
+
+- Ahn SH, Edwards AK, Singh SS, Young SL, Lessey BA, Tayade C. IL-17A Contributes to the Pathogenesis of Endometriosis by Triggering Proinflammatory Cytokines and Angiogenic Growth Factors. J Immunol. 2015;195(6):2591–2600. doi:10.4049/jimmunol.1501138
+
+- Chang JG, Su TH, Wei HJ, et al. Analysis of TSG101 tumour susceptibility gene transcripts in cervical and endometrial cancers. Br J Cancer. 1999;79(3-4):445–450. doi:10.1038/sj.bjc.6690069
+
+- Ghanbari Andarieh M, Agajani Delavar M, Moslemi D, Esmaeilzadeh S. Risk Factors for Endometrial Cancer: Results from a Hospital-Based Case-Control Study. Asian Pac J Cancer Prev. ;17(10):4791–4796. Published . doi:10.22034/apjcp.2016.17.10.4791
+
+- Gorin A, Gabitova L, Astsaturov I. Regulation of cholesterol biosynthesis and cancer signaling. Curr Opin Pharmacol. 2012;12(6):710–716. doi:10.1016/j.coph.2012.06.011
+
+- Leslie KK, Thiel KW, Goodheart MJ, De Geest K, Jia Y, Yang S. Endometrial cancer. Obstet Gynecol Clin North Am. 2012;39(2):255–268. doi:10.1016/j.ogc.2012.04.001
+
+- Svoronos N, Perales-Puchalt A, Allegrezza MJ, et al. Tumor Cell-Independent Estrogen Signaling Drives Disease Progression through Mobilization of Myeloid-Derived Suppressor Cells. Cancer Discov. 2017;7(1):72–85. doi:10.1158/2159-8290.CD-16-0502
+
+- Young T.W., Mei F.C., Rosen D.G., Yang G., Li N., Liu J., Cheng X. Up-regulation of tumor susceptibility gene 101 protein in ovarian carcinomas revealed by proteomics analyses. Mol. Cell. Proteomics. 2007;6:294–304. doi: 10.1074/mcp.M600305-MCP200.
+

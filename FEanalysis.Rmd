@@ -1,0 +1,205 @@
+---
+output:
+  BiocStyle::html_document
+---
+
+<!---
+Because we split the analysis pipeline in different independent files,
+to speed up processing it, here in the setup block we load libraries and
+objects that were loaded or produced in the previously processed file,
+and which are necessary in this file.
+--->
+
+
+```{r setup, cache=FALSE, echo=FALSE, results='hide', message=FALSE, include = TRUE}
+library(knitr)
+library(SummarizedExperiment)
+library(edgeR)
+library(geneplotter)
+
+opts_chunk$set(cache=TRUE,
+               cache.path="cache/file2",
+               cache.extra=R.version.string,
+               autodep=TRUE,
+               fig.align="center",
+               comment="")
+
+se <- readRDS(file.path("rawCounts", "seUCEC.rds"))
+dge <- readRDS(file.path("results", "dge.rds"))
+se.filt.unnorm <- readRDS(file.path("results", "se.filt.unnorm.rds"))
+dge.filt.unnorm <- readRDS(file.path("results", "dge.filt.unnorm.rds"))
+se.filt <- readRDS(file.path("results", "se.filt.rds"))
+dge.filt <- readRDS(file.path("results", "dge.filt.rds"))
+DEgenes_u <- readRDS(file.path("results", "DEgenes.rds"))
+tt_u <- readRDS(file.path("results", "tt_u.rds"))
+FDRcutoff <- 0.01
+```
+
+
+# Functional analysis
+
+Given a list of differentially expressed (DE) genes, we may know the function and role of some of those genes within the molecular process under study. This may already shed light on what is being investigated.
+However, even if we knew what every DE gene is doing, we would need to frame their activity within the
+pathways in which they are participating to make a hypothesis about why they are changing.
+
+#The Gene Ontology analysis
+There are several R packages at CRAN/Bioconductor that facilitate performing a functional enrichment analysis on the entire collection of GO gene sets. We are going to illustrate this analysis with the Bioconductor
+package GOstats (http://www.bioconductor.org/packages/release/bioc/html/GOstats.html).
+Doing this analysis with GOstats (http://www.bioconductor.org/packages/release/bioc/html/GOstats.html)
+consists of the following three steps:
+1. Build a parameter object with information specifying the gene universe, the set of DE genes, the
+annotation package to use, etc.
+2. Run the functional enrichment analysis.
+3. Store and visualize the results.
+
+
+1. Build a parameter object:
+```{r}
+library(GOstats)
+library(org.Hs.eg.db)
+
+#Gene Universe
+geneUniverse <- rownames(se.filt)
+length(geneUniverse)
+
+#Differential expressed genes:
+length(DEgenes_u)
+
+#Overexpressed genes in tumor samples:
+over_DEgenes <- rownames(tt_u)[tt_u$adj.P.Val < FDRcutoff & tt_u$logFC > 0]
+length(over_DEgenes)
+
+#Underexpressed genes in tumor samples:
+under_DEgenes <- rownames(tt_u)[tt_u$adj.P.Val < FDRcutoff & tt_u$logFC < 0]
+length(under_DEgenes)
+
+params <- new("GOHyperGParams", geneIds=DEgenes_u, universeGeneIds=geneUniverse, annotation="org.Hs.eg.db", ontology="BP",pvalueCutoff=0.05,testDirection="over")
+
+over_params <- new("GOHyperGParams", geneIds=over_DEgenes,universeGeneIds=geneUniverse,annotation="org.Hs.eg.db", ontology="BP", pvalueCutoff=0.05, testDirection="over")
+
+under_params <- new("GOHyperGParams", geneIds=under_DEgenes,universeGeneIds=geneUniverse,annotation="org.Hs.eg.db", ontology="BP", pvalueCutoff=0.05, testDirection="over")
+
+```
+ The four previous parameters represent: 
+ - Gene universe (N): the total, filtered genes we considered in the DE analysis (11638).
+ - DE genes (m): the result from the previous analysis, the statistically significant DE genes (6540).
+ - The overexpressed genes, a subset of the DE genes (as mentioned, possitive logFC, which means they appear in tumor samples more frequently than in normal ones), with 3169 in total.
+ - The underexpressed genes. Same as before but for negative logFC values. This genes are less frequent in tumor samples (3398).  
+ 
+ 
+ 2. Run the functional enrichment analysis. Using this method we perform the Fisher analisis and the anotation all together.
+```{r}
+conditional(params) <- TRUE
+hgOver <- hyperGTest(params)
+hgOver
+```
+3. Store and visualize the results.
+
+```{r}
+#Store the html
+htmlReport(hgOver, file = "gotests.html")
+browseURL("gotests.html")
+
+
+```
+We can see that the gene univers is smaller than before because not all the gens have GO anotations or ids, so the package could not identify or annotate all of them. 
+
+After filtering genes without GO id, we can get a first look to the results: 
+```{r}
+#Visualize the results in R:
+goresults <- summary(hgOver)
+head(goresults)
+
+```
+
+ 
+```{r}
+#To try to spot the more interesting and reliable GO terms we can filter the previous results by a minimum value on the Count and Size columns, a maximum Count value, and order them by the OddsRatio column:
+
+#We used 10 for the counts because the number of count was bigger than 10.
+goresults <- goresults[goresults$Size >= 10 & goresults$Size <= 300 & goresults$Count >= 10, ]
+goresults <- goresults[order(goresults$OddsRatio, decreasing=TRUE), ]
+#Store the html (filtered ones)
+dim(goresults)
+head(goresults)
+```
+
+After filtering a minimum count value, we can see that the top results are more related to our disease, or to general cancer processes than the previous one.
+
+Several studies have proved that "IL-17" plays an important role in the pathophysiology of cancer, from tumorigenesis, proliferation, angiogenesis, and metastasis, to adapting the tumour in its ability to confer upon itself both immune, and chemotherapy resistance \cite{Young2016}. 
+
+The second GO term represented in the above table that is also called "Ubiquitin-dependent protein catabolic process"" via the MVB pathway involve genes that are important on cancer tumorigenesis and/or progression such as "TSG101" \cite{Chang1999}.
+In previous studies in endometrial cancer patients, aberrant  splicing  of  "TSG101"" gene  appeared  to  be  identified more frequently in cancerous than in non-cancerous tissues. Furthermore, functional proteomic analysis of genetically-defined human ovarian cancer models revealed that "TSG101"" is dysregulated in human ovarian epithelial cells expressing oncogenic "HRAS" or "KRAS" \cite{Young2007}. 
+
+On the other hand, data from profiling of cancer tissues demonstrate critical contribution of cholesterol metabolism to cancer origin \cite{Andrey2013}.
+
+
+It is always interesting to see what genes are involved in the enriched pathways, and compare them to our top previously obtained DE genes. We can do that by accessing the "symbol" term of the GO object. 
+
+```{r results='hide', message=FALSE}
+geneID <- geneIdsByCategory(hgOver)[goresults$GOBPID]
+geneSYM <- sapply(geneID, function(id) select(org.Hs.eg.db, columns="SYMBOL", key=id, keytype="ENTREZID")$SYMBOL)
+
+```
+
+```{r}
+set1 <- geneSYM[1:6]
+set1 
+```
+
+We could notice that none of our top 5 DE genes (represented in Figure 27: Model 3 - Volcano plots of DE) are listed in the previous pathways, but there might be 2 reasons for that:
+
+1) We only visualize the top 5 genes, but over 6000 were considered to find the pathways and they were selected per counts, so the more genes contributing, the more significant the pathway was. Which means it counted more the amount of genes involved in it, rather than the specific contribution of 1.
+
+2) We only picked 5 genes in order to make the analysis simpler and more bearable when comparing 3 models, so probably if we had increased the number, some of the top genes would appear in the list
+
+Nevertheless, all the pathways are significant in cancer pathogenesis and also there appear highly significant genes, such as the mentioned TSG101 and FOXP3 , so we consider that our approach worked fine. 
+
+
+As we made the distinction of those genes that are overexpressed and underexpressed in tumor samples, we can repeat the process to detect enriched sets taking into account this. 
+
+For overexpressed genes: 
+```{r}
+conditional(over_params) <- TRUE
+over_hgOver <- hyperGTest(over_params)
+over_goresults <- summary(over_hgOver)
+head(over_goresults)
+```
+
+```{r}
+over_goresults <- over_goresults[over_goresults$Size >= 10 & over_goresults$Size <= 300 & over_goresults$Count >= 10 , ]
+over_goresults <- over_goresults[order(over_goresults$OddsRatio, decreasing=TRUE), ]
+head(over_goresults)
+```
+
+For underexpressed genes: 
+```{r}
+conditional(under_params) <- TRUE
+under_hgOver <- hyperGTest(under_params)
+under_goresults <- summary(under_hgOver)
+head(under_goresults)
+```
+
+```{r}
+under_goresults <- under_goresults[under_goresults$Size >= 10 & under_goresults$Size <= 300 & under_goresults$Count >= 10 , ]
+under_goresults <- under_goresults[order(under_goresults$OddsRatio, decreasing=TRUE), ]
+head(under_goresults)
+```
+
+This differenciation of over and under expression allowed us to reafirm the results, as the pathways overexpressed are related to pathogenesis, and the underexpressed are related to damage control and cell cycle activities.
+
+One example is "GO:0071392": Previous studies have proved that estrogen plays an essential role in endometrial cancer cell proliferation \cite{Svoronos2018}. 
+
+#Concluding remarks
+
+ * A 23 paired data analysis enabled us to avoid batch effect and to have a balanced set being the main source of variation driven by the tumor and normal condition. 
+ 
+ * 6540 genes have been detected as differentially expressed genes using the Adjust for unknown covarites method.
+ 
+ * The functional enrichment analysis identified GO terms that are related to cancer tumorigenesis and progression.
+
+## Session information
+
+```{r, message=FALSE}
+sessionInfo()
+```
